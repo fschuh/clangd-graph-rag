@@ -32,6 +32,33 @@ from tree_sitter import Language, Parser as TreeSitterParser
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
+
+def _configure_libclang_from_env() -> None:
+    """Configure libclang from LIBCLANG_PATH, as either a DLL file or a directory."""
+    libclang_path = os.getenv("LIBCLANG_PATH")
+    if not libclang_path:
+        return
+
+    libclang_path = os.path.abspath(libclang_path)
+
+    if os.path.isfile(libclang_path):
+        try:
+            clang.cindex.Config.set_library_file(libclang_path)
+            logger.debug(f"Configured libclang from file: {libclang_path}")
+            return
+        except Exception as e:
+            logger.debug(f"Could not configure libclang from file '{libclang_path}': {e}")
+
+    if os.path.isdir(libclang_path):
+        try:
+            clang.cindex.Config.set_library_path(libclang_path)
+            logger.debug(f"Configured libclang search path: {libclang_path}")
+        except Exception as e:
+            logger.debug(f"Could not configure libclang from path '{libclang_path}': {e}")
+
+
+_configure_libclang_from_env()
+
 # ============================================================
 # Data classes for span representation
 # ============================================================
@@ -749,6 +776,7 @@ _count_processed_tus = 0
 def _worker_initializer(parser_type: str, init_args: Dict[str, Any]):
     global _worker_impl_instance
     sys.setrecursionlimit(3000)
+    _configure_libclang_from_env()
     if parser_type == 'clang': _worker_impl_instance = _ClangWorkerImpl(**init_args)
     elif parser_type == 'treesitter': _worker_impl_instance = _TreesitterWorkerImpl()
     else: raise ValueError(f"Unknown parser type: {parser_type}")
@@ -930,8 +958,24 @@ class ClangParser(CompilationParser):
         raise FileNotFoundError(path)
 
     def _get_clang_resource_dir(self):
-        try: return os.path.join(subprocess.check_output(['clang', '-print-resource-dir']).decode('utf-8').strip(), 'include')
-        except: return None
+        clang_cmds = []
+        libclang_path = os.getenv("LIBCLANG_PATH")
+        if libclang_path:
+            clang_bin_path = libclang_path if os.path.isdir(libclang_path) else os.path.dirname(libclang_path)
+            clang_exe_name = 'clang.exe' if os.name == 'nt' else 'clang'
+            clang_exe_path = os.path.join(clang_bin_path, clang_exe_name)
+            if os.path.exists(clang_exe_path):
+                clang_cmds.append(clang_exe_path)
+
+        clang_cmds.append('clang')
+
+        for clang_cmd in clang_cmds:
+            try:
+                resource_dir = subprocess.check_output([clang_cmd, '-print-resource-dir']).decode('utf-8').strip()
+                return os.path.join(resource_dir, 'include')
+            except Exception:
+                continue
+        return None
 
     def _get_cmd_file_realpath(self, cmd):
         f = cmd.filename
