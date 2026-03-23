@@ -59,6 +59,37 @@ def _configure_libclang_from_env() -> None:
 
 _configure_libclang_from_env()
 
+
+def _file_uri_to_path(file_uri: str) -> str:
+    """Best-effort conversion of a file URI or path string to a local filesystem path.
+
+    This codebase historically constructs Windows file URIs as `file://E:\path\to\file`,
+    which is not RFC-compliant and causes `urlparse(...).path` to be empty while the actual
+    path lands in `netloc`. This helper tolerates both the malformed legacy form and the
+    standard `file:///E:/path/to/file` form.
+    """
+    if not file_uri:
+        return ""
+
+    if not file_uri.startswith("file://"):
+        return file_uri
+
+    parsed = urlparse(file_uri)
+
+    # Standard file URI case, e.g. file:///E:/path/to/file
+    if parsed.path:
+        path = unquote(parsed.path)
+        if os.name == 'nt' and len(path) >= 3 and path[0] == '/' and path[2] == ':':
+            path = path[1:]
+        return path
+
+    # Legacy/malformed Windows URI case, e.g. file://E:\path\to\file
+    if parsed.netloc:
+        return unquote(parsed.netloc)
+
+    # Final fallback: strip the scheme prefix.
+    return unquote(file_uri[len("file://"):])
+
 # ============================================================
 # Data classes for span representation
 # ============================================================
@@ -371,7 +402,11 @@ class _ClangWorkerImpl:
             synthetic_id = CompilationParser.make_synthetic_id(node_key)
 
         # ANONYMITY HANDLING: Use USR as name for debug info when no spelling is available.
-        is_anonymous = not node.spelling or node.spelling.contains("(unnamed") or node.spelling.startswith("(anonymous")
+        is_anonymous = (
+            not node.spelling
+            or "(unnamed" in node.spelling
+            or node.spelling.startswith("(anonymous")
+        )
         node_name = usr if (is_anonymous and usr) else node.spelling
 
         # Deduplication check using the final ID.
@@ -499,9 +534,12 @@ class _ClangWorkerImpl:
             return None
         
         if parent.kind.name not in ClangParser.NODE_KIND_FOR_BODY_SPANS:
-            if parent.kind.name not in "ClangParser.NODE_KIND_NAMESPACE": 
-                logger.error(f"Parent {parent.kind.name} {parent.spelling} at {parent.location}) of node {node.spelling} at {node.location} is not in NODE_KIND_FOR_BODY_SPANS")
-                return None
+            if parent.kind.name not in ClangParser.NODE_KIND_NAMESPACE:
+                logger.debug(
+                    f"Parent {parent.kind.name} {parent.spelling} at {parent.location}) "
+                    f"of node {node.spelling} at {node.location} is not in NODE_KIND_FOR_BODY_SPANS"
+                )
+            return None
 
         # Resolve parent ID via USR hashing. This ensures children link to the semantic parent ID.
         usr = parent.get_usr()
@@ -581,7 +619,7 @@ class _ClangWorkerImpl:
         )
         expanded_from_id = CompilationParser.make_synthetic_id(node_key)
 
-        file_path = unquote(urlparse(file_uri).path)
+        file_path = _file_uri_to_path(file_uri)
         original_name = self._get_source_text_for_extent(enclosing_inst.extent, file_path)
 
         return original_name, expanded_from_id
@@ -688,19 +726,89 @@ class _ClangWorkerImpl:
     def _sanitize_args(self, args: List[str], file_path: str) -> List[str]:
             sanitized = []
             skip_next = False
+
+            is_cl_driver = any(a == '--driver-mode=cl' for a in args)
+
+            cl_keep_exact = {
+                '--driver-mode=cl',
+                '-Xclang',
+                '-I',
+                '-isystem',
+                '-iquote',
+                '-include',
+            }
+            cl_keep_prefixes = (
+                '/D', '/U', '/I', '/FI', '/imsvc', '/std:', '/TP', '/TC',
+                '/Zc:', '/permissive', '/volatile:', '/clang:'
+            )
+            generic_keep_prefixes = (
+                '-D', '-U', '-I', '-isystem', '-iquote', '-include',
+                '-std=', '-x', '--target=', '-resource-dir=',
+                '-fms-compatibility-version=', '-fms-extensions',
+                '-fdeclspec', '-ferror-limit=', '-fdiagnostics-absolute-paths'
+            )
+
+            cl_exact_skip = {
+                '/c', '/nologo', '/showFilenames', '/FC', '/FS', '/MP',
+                '/Z7', '/Zo', '/Zi', '/ZI', '/Fd', '/bigobj'
+            }
+            cl_prefix_skip = (
+                '/Fo', '/Fd', '/Fa', '/Fi', '/Fm', '/Fp', '/FR', '/Fr',
+                '/Yl', '/Yu', '/errorReport:', '/sourceDependencies'
+            )
+            cl_warning_prefixes = ('/W', '/wd', '/we', '/wo', '/w1', '/w2', '/w3', '/w4')
+            cl_opt_prefixes = (
+                '/O', '/Ob', '/Oi', '/Ot', '/Oy', '/GF', '/Gy', '/Gw', '/GL',
+                '/GS', '/GR', '/Gd', '/arch:', '/fp:', '/hotpatch', '/MT',
+                '/MTd', '/MD', '/MDd'
+            )
+
             for a in args:
                 if skip_next:
+                    sanitized.append(a)
                     skip_next = False
                     continue
-                if a == '--': continue
-                if a.startswith(('-W', '-O')): continue
+
+                if a == '--':
+                    continue
+
+                if a == file_path or os.path.basename(a) == os.path.basename(file_path):
+                    continue
+
+                if is_cl_driver:
+                    # clang-cl/MSVC-style compile commands are much easier to parse
+                    # reliably with an allowlist of AST-relevant flags.
+                    if a in cl_keep_exact:
+                        sanitized.append(a)
+                        if a in {'-Xclang', '-I', '-isystem', '-iquote', '-include'}:
+                            skip_next = True
+                        continue
+
+                    if a.startswith(cl_keep_prefixes) or a.startswith(generic_keep_prefixes):
+                        sanitized.append(a)
+                    continue
+
+                # GCC/Clang-style flags
+                if a.startswith(('-W', '-O')):
+                    continue
                 if a in {'-c', '-o', '-MMD', '-MF', '-MT', '-MQ', '-fcolor-diagnostics', '-fdiagnostics-color'}:
                     if a in {'-o', '-MF', '-MT', '-MQ'}:
                         skip_next = True
                     continue
-                if a == file_path or os.path.basename(a) == os.path.basename(file_path):
+
+                # clang-cl / MSVC-style flags that are driver/output/debug oriented and
+                # commonly cause libclang parsing failures while not affecting the AST shape.
+                if a in cl_exact_skip:
                     continue
+                if a.startswith(cl_prefix_skip):
+                    continue
+                if a.startswith(cl_warning_prefixes):
+                    continue
+                if a.startswith(cl_opt_prefixes):
+                    continue
+
                 sanitized.append(a)
+
             return sanitized
 
     def _get_tu_hash(self, args: List[str]) -> str:
