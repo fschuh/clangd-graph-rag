@@ -2,7 +2,7 @@ google-adk==1.21.0
 deprecated
 fastapi
 litellm
-clang==17.0.6
+clang==21.1.7
 fastmcp==2.0.0
 GitPython==3.1.45
 neo4j==5.28.1
