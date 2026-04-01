@@ -1,9 +1,9 @@
 import logging
-from urllib.parse import urlparse, unquote
 from typing import Optional
 
 from clangd_index_yaml_parser import Symbol, Location
 from compilation_engine import SourceSpan
+from utils import file_uri_to_path
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
@@ -19,15 +19,15 @@ class UtilsMixin:
         """
         logger.info("Filtering symbols to only include those in the project path.")
         project_path = self.compilation_manager.project_path
-        
+
         keys_to_remove = []
         for sym_id, sym in self.symbol_parser.symbols.items():
             loc = sym.definition or sym.declaration
             if loc:
-                sym_abs_path = unquote(urlparse(loc.file_uri).path)
+                sym_abs_path = file_uri_to_path(loc.file_uri)
                 if sym_abs_path.startswith(project_path) or sym.kind in ("Namespace"):
                     continue
-                
+
             keys_to_remove.append(sym_id)
 
         logger.info(f"Filtered {len(self.symbol_parser.symbols)} symbols to {len(self.symbol_parser.symbols) - len(keys_to_remove)} symbols.")        

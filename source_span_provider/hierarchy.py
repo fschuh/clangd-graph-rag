@@ -1,11 +1,10 @@
 import logging
 import gc, sys
 from typing import Dict, Set
-from urllib.parse import urlparse, unquote
 
 from clangd_index_yaml_parser import Location, RelativeLocation
 from compilation_engine import SourceSpan
-from utils import hash_usr_to_id, make_symbol_key
+from utils import hash_usr_to_id, make_symbol_key, file_uri_to_path
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
@@ -211,7 +210,7 @@ class HierarchyMixin:
                 continue
             
             # Namespace symbols are allowed to not be in the project path
-            sym_abs_path = unquote(urlparse(loc.file_uri).path)
+            sym_abs_path = file_uri_to_path(loc.file_uri)
             if not sym_abs_path.startswith(self.compilation_manager.project_path):
                 continue
 

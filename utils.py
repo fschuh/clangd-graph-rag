@@ -3,7 +3,9 @@
 General utility functions for the project.
 """
 import hashlib
-import os   
+import os
+import sys
+from urllib.parse import urlparse, unquote
 
 class FileExtensions:
     """Grouped file extension constants for C/C++ projects."""
@@ -53,6 +55,39 @@ def make_synthetic_id(key: str) -> str:
     Generates a deterministic MD5 hash for a given key string.
     """
     return hashlib.md5(key.encode()).hexdigest()
+
+
+def path_to_file_uri(path: str) -> str:
+    """
+    Convert a native OS path to a file:// URI.
+
+    On Windows, os.path.abspath produces "D:\\path\\file.h". The proper file URI
+    is "file:///D:/path/file.h" (triple slash, forward slashes). This function
+    ensures the URI is well-formed on all platforms.
+    """
+    path = os.path.abspath(path)
+    if sys.platform == 'win32':
+        # Convert backslashes to forward slashes and add triple-slash prefix
+        return 'file:///' + path.replace('\\', '/')
+    return 'file://' + path
+
+
+def file_uri_to_path(uri: str) -> str:
+    """
+    Convert a file:// URI to a native OS path.
+
+    On Windows, urlparse("file:///D:/path/file.h").path returns "/D:/path/file.h"
+    with a spurious leading slash and forward slashes. This function strips the
+    leading slash and normalizes separators so the result matches os.path.abspath()
+    style paths (e.g. "D:\\path\\file.h").
+
+    On Linux/macOS, the path is already correct ("/path/file.h").
+    """
+    path = unquote(urlparse(uri).path)
+    # On Windows, strip the leading '/' before a drive letter like /D:/...
+    if sys.platform == 'win32' and len(path) >= 3 and path[0] == '/' and path[2] == ':':
+        path = path[1:]
+    return os.path.normpath(path)
 
 
 def get_language(file_name: str) -> str:

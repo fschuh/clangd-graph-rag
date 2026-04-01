@@ -23,6 +23,7 @@ from path_processor import PathProcessor, PathManager
 from clangd_call_graph_builder import ClangdCallGraphExtractorWithContainer, ClangdCallGraphExtractorWithoutContainer
 from source_span_provider import SourceSpanProvider
 from include_relation_provider import IncludeRelationProvider
+from utils import path_to_file_uri
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
@@ -89,7 +90,7 @@ class GraphUpdateScopeBuilder:
         span_provider.enrich_symbols_with_span()
 
         # 3. Find the seed symbols
-        dirty_file_uris = {f"file://{os.path.abspath(f)}" for f in dirty_files}
+        dirty_file_uris = {path_to_file_uri(f) for f in dirty_files}
         self.seed_symbol_to_label = {
             s.id: Symbol.get_node_label(s)
             for s in full_symbol_parser.symbols.values()

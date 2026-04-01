@@ -8,7 +8,6 @@ import sys
 import argparse
 import math
 from pathlib import Path
-from urllib.parse import urlparse, unquote
 from typing import List, Dict, Any, Tuple, Optional
 from collections import defaultdict
 import logging
@@ -19,7 +18,7 @@ import input_params
 from clangd_index_yaml_parser import SymbolParser, Symbol
 from compilation_engine import CompilationManager
 from neo4j_manager import Neo4jManager
-from utils import align_string
+from utils import align_string, file_uri_to_path
 from path_processor import PathProcessor, PathManager
 
 logger = logging.getLogger(__name__)
@@ -68,7 +67,7 @@ class SymbolProcessor:
         
         primary_location = sym.definition or sym.declaration
         if primary_location:
-            abs_file_path = unquote(urlparse(primary_location.file_uri).path)
+            abs_file_path = file_uri_to_path(primary_location.file_uri)
             if self.path_manager.is_within_project(abs_file_path):
                 symbol_data["path"] = self.path_manager.uri_to_relative_path(primary_location.file_uri)
             else:
@@ -118,7 +117,7 @@ class SymbolProcessor:
             symbol_data["qualified_name"] = sym.scope + sym.name
 
         if sym.definition:
-            abs_file_path = unquote(urlparse(sym.definition.file_uri).path)
+            abs_file_path = file_uri_to_path(sym.definition.file_uri)
             if self.path_manager.is_within_project(abs_file_path):
                 symbol_data["file_path"] = self.path_manager.uri_to_relative_path(sym.definition.file_uri)
             else:

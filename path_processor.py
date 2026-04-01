@@ -12,7 +12,7 @@ import gc
 from tqdm import tqdm
 
 from neo4j_manager import Neo4jManager
-from utils import align_string
+from utils import align_string, file_uri_to_path
 from clangd_index_yaml_parser import Symbol
 from compilation_engine import CompilationManager
 
@@ -27,7 +27,7 @@ class PathManager:
     def uri_to_relative_path(self, uri: str) -> str:
         parsed = urlparse(uri)
         if parsed.scheme != 'file': return uri
-        path = unquote(parsed.path)
+        path = file_uri_to_path(uri)
         try:
             return str(Path(path).relative_to(self.project_path))
         except ValueError:
@@ -35,7 +35,7 @@ class PathManager:
 
     def is_within_project(self, path: str) -> bool:
         try:
-            Path(path).relative_to(self.project_path)
+            Path(os.path.normpath(path)).relative_to(self.project_path)
             return True
         except ValueError:
             return False
@@ -51,7 +51,7 @@ class PathProcessor:
         for sym in tqdm(symbols.values(), desc=align_string("Discovering paths from symbols")):
             for loc in [sym.definition, sym.declaration]:
                 if loc and urlparse(loc.file_uri).scheme == 'file':
-                    abs_path = unquote(urlparse(loc.file_uri).path)
+                    abs_path = file_uri_to_path(loc.file_uri)
                     if self.path_manager.is_within_project(abs_path):
                         project_files.add(self.path_manager.uri_to_relative_path(loc.file_uri))
         logger.info(f"Discovered {len(project_files)} unique files from symbols.")

@@ -10,7 +10,7 @@ from typing import List, Dict, Set, Tuple, Any, Optional
 from collections import defaultdict
 
 from clangd_index_yaml_parser import RelativeLocation, Location
-from utils import hash_usr_to_id, make_symbol_key, make_synthetic_id, get_language, FileExtensions
+from utils import hash_usr_to_id, make_symbol_key, make_synthetic_id, get_language, FileExtensions, path_to_file_uri
 from .node_parser import NodeParserMixin
 from .types import *
 
@@ -146,7 +146,7 @@ class _ClangWorkerImpl(NodeParserMixin):
             if self._should_process_node(node, file_name):
                 self._process_macro_definition(node, file_name)
         elif node.kind == clang.cindex.CursorKind.MACRO_INSTANTIATION:
-            self.instantiations[f"file://{file_name}"].append(node)
+            self.instantiations[path_to_file_uri(file_name)].append(node)
         elif node.is_definition() and node.kind.name in NODE_KIND_FOR_BODY_SPANS:
             if node.kind.name in NODE_KIND_VARIABLES:
                 parent = node.semantic_parent
@@ -187,11 +187,11 @@ class _ClangWorkerImpl(NodeParserMixin):
         if usr:
             parent_id = hash_usr_to_id(usr)
             if parent.kind.name in NODE_KIND_FOR_COMPOSITE_TYPES:
-                parent_uri = f"file://{os.path.abspath(file_name)}"
+                parent_uri = path_to_file_uri(file_name)
                 if parent_id not in self.span_results[(parent_uri, self._tu_hash)]:
                     self._process_generic_node(parent, file_name)
             return parent_id
-        file_uri = f"file://{os.path.abspath(file_name)}"
+        file_uri = path_to_file_uri(file_name)
         line, col = self._get_symbol_name_location(parent)
         parent_kind = self._convert_node_kind_to_index_kind(parent)
         return make_synthetic_id(make_symbol_key(parent.spelling, parent_kind, file_uri, line, col))
