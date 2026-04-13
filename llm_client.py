@@ -6,7 +6,7 @@ It uses a centralized background event loop to manage concurrency and prevent
 file descriptor explosion when using FanoutCache.
 """
 
-import os, time
+import os, time, sys
 import logging
 import litellm
 import hashlib
@@ -17,7 +17,12 @@ import threading
 import atexit
 import math
 from typing import Optional, Any
-import resource
+
+# resource module is Unix-only; not available on Windows
+if sys.platform != 'win32':
+    import resource
+else:
+    resource = None
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
@@ -59,12 +64,18 @@ class LlmCacheManager:
         In the new async architecture, only the background event loop thread
         opens connections to the cache. The FD requirement is now much lower.
         Needed FDs = (1 thread * shards * ~3 FDs) + overhead.
+
+        This check is skipped on Windows where the resource module is not available.
         """
+        if resource is None:
+            # Windows doesn't have RLIMIT_NOFILE; skip this check
+            return
+
         soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
-        
+
         # Base requirement: shards * 3 (for SQLite) + room for network sockets and files
         file_count_needed = (self.shards * 3) + 150
-        
+
         if hard < file_count_needed:
             logger.error(f"File count hard limit {hard} is too low. Needed: {file_count_needed}.")
             exit(1)
