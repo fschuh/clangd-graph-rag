@@ -6,11 +6,10 @@ import os
 import logging
 import sys
 import clang.cindex
-from urllib.parse import urlparse, unquote
 from typing import Optional, Tuple, Protocol, Dict, List, Any
 
 from symbol_parser import RelativeLocation, Location
-from utils import hash_usr_to_id, make_symbol_key, make_synthetic_id
+from utils import hash_usr_to_id, make_symbol_key, make_synthetic_id, file_uri_to_path, path_to_file_uri
 from .types import *
 
 logger = logging.getLogger(__name__)
@@ -39,7 +38,7 @@ class NodeParserMixin:
         name_start_line, name_start_col = self._get_symbol_name_location(node)
         body_start_line, body_start_col = node.extent.start.line - 1, node.extent.start.column - 1
         body_end_line, body_end_col = node.extent.end.line - 1, node.extent.end.column - 1
-        file_uri = f"file://{file_name}"
+        file_uri = path_to_file_uri(file_name)
 
         kind = self._convert_node_kind_to_index_kind(node)
         
@@ -119,7 +118,7 @@ class NodeParserMixin:
                 node_start_line, node_start_col = node.extent.start.line, node.extent.start.column
                 node_end_line, node_end_col = node.extent.end.line, node.extent.end.column
                 # The template must have a location file.
-                file_uri = f"file://{os.path.abspath(template_cursor.location.file.name)}"
+                file_uri = path_to_file_uri(template_cursor.location.file.name)
                 
                 template_location = (template_start_line, template_start_col, template_end_line, template_end_col, file_uri)
                 node_location = (node_start_line, node_start_col, node_end_line, node_end_col, file_uri)
@@ -148,19 +147,19 @@ class NodeParserMixin:
         if usr:
             parent_id = hash_usr_to_id(usr)
             if parent.kind.name in NODE_KIND_FOR_COMPOSITE_TYPES:
-                parent_uri = f"file://{os.path.abspath(file_name)}"
+                parent_uri = path_to_file_uri(file_name)
                 if parent_id not in self.span_results[(parent_uri, self._tu_hash)]:
                     self._process_generic_node(parent, file_name)
             return parent_id
         # No USR, use old way to create synthetic id. This should never happen.
-        file_uri = f"file://{os.path.abspath(file_name)}"
+        file_uri = path_to_file_uri(file_name)
         line, col = self._get_symbol_name_location(parent)
         parent_kind = self._convert_node_kind_to_index_kind(parent)
         return make_synthetic_id(make_symbol_key(parent.spelling, parent_kind, file_uri, line, col))
 
     def _process_macro_definition(self: ClangWorkerInterface, node, file_name):
         name = node.spelling
-        file_uri = f"file://{file_name}"
+        file_uri = path_to_file_uri(file_name)
         loc = node.location
         name_line, name_col = loc.line - 1, loc.column - 1
         
@@ -202,7 +201,7 @@ class NodeParserMixin:
         name_start_line, name_start_col = self._get_symbol_name_location(node)
         body_start_line, body_start_col = node.extent.start.line - 1, node.extent.start.column - 1
         body_end_line, body_end_col = node.extent.end.line - 1, node.extent.end.column - 1
-        file_uri = f"file://{file_name}"
+        file_uri = path_to_file_uri(file_name)
         aliaser_id = hash_usr_to_id(node.get_usr())
         scope = self._get_fully_qualified_scope(semantic_parent)
         parent_id = self._get_parent_id(node)
@@ -231,7 +230,7 @@ class NodeParserMixin:
                         make_symbol_key(
                             aliasee_decl_cursor.spelling,
                             aliased_type_kind,
-                            f"file://{os.path.abspath(aliasee_decl_cursor.location.file.name)}",
+                            path_to_file_uri(aliasee_decl_cursor.location.file.name),
                             aliasee_name_line,
                             aliasee_name_col
                         )
@@ -310,10 +309,10 @@ class NodeParserMixin:
         if usr: 
             expanded_from_id = hash_usr_to_id(usr)
         else:
-            node_key = make_symbol_key(macro_def_cursor.spelling, "Macro", f"file://{def_file}", def_loc.line - 1, def_loc.column - 1)
+            node_key = make_symbol_key(macro_def_cursor.spelling, "Macro", path_to_file_uri(def_file), def_loc.line - 1, def_loc.column - 1)
             expanded_from_id = make_synthetic_id(node_key)
 
-        file_path = unquote(urlparse(file_uri).path)
+        file_path = file_uri_to_path(file_uri)
         original_name = self._get_source_text_for_extent(enclosing_inst.extent, file_path)
 
         return original_name, expanded_from_id

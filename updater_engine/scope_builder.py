@@ -24,6 +24,7 @@ from graph_ingester import (
     IncludeRelationProvider
 )
 from symbol_enricher import SymbolEnricher
+from utils import path_to_file_uri
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
@@ -111,7 +112,7 @@ class GraphUpdateScopeBuilder:
         symbol_enricher.enrich_symbols()
 
         # 3. Find the seed symbols
-        dirty_file_uris = {f"file://{os.path.abspath(f)}" for f in dirty_files}
+        dirty_file_uris = {path_to_file_uri(f) for f in dirty_files}
         self.seed_symbol_ids = {
             s.id
             for s in full_symbol_parser.symbols.values()

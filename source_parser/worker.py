@@ -10,7 +10,7 @@ from typing import List, Dict, Set, Tuple, Any, Optional
 from collections import defaultdict
 
 from symbol_parser import RelativeLocation, Location
-from utils import hash_usr_to_id, make_symbol_key, make_synthetic_id, get_language, FileExtensions
+from utils import hash_usr_to_id, make_symbol_key, make_synthetic_id, get_language, FileExtensions, path_to_file_uri
 from .node_parser import NodeParserMixin
 from .types import *
 
@@ -146,7 +146,7 @@ class _ClangWorkerImpl(NodeParserMixin):
             if self._should_process_node(node, file_name):
                 self._process_macro_definition(node, file_name)
         elif node.kind == clang.cindex.CursorKind.MACRO_INSTANTIATION:
-            self.instantiations[f"file://{file_name}"].append(node)
+            self.instantiations[path_to_file_uri(file_name)].append(node)
         elif node.is_definition() and node.kind.name in NODE_KIND_FOR_BODY_SPANS:
             if node.kind.name in NODE_KIND_VARIABLES:
                 parent = node.semantic_parent

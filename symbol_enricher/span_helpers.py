@@ -1,9 +1,9 @@
 import logging
-from urllib.parse import urlparse, unquote
 from typing import Optional
 
 from symbol_parser import Symbol, Location
 from source_parser import SourceSpan
+from utils import file_uri_to_path
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
@@ -24,7 +24,7 @@ class HelpersMixin:
         for sym_id, sym in self.symbol_parser.symbols.items():
             loc = sym.definition or sym.declaration
             if loc:
-                sym_abs_path = unquote(urlparse(loc.file_uri).path)
+                sym_abs_path = file_uri_to_path(loc.file_uri)
                 if sym_abs_path.startswith(project_path) or sym.kind in ("Namespace"):
                     continue
                 

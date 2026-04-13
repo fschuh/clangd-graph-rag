@@ -88,7 +88,9 @@ class CompilationManager:
         # Build work items
         db = clang.cindex.CompilationDatabase.fromDirectory(db_dir)
         source_exts = FileExtensions.ALL_C_CPP
-        source_files = [f for f in files_to_parse if f.lower().endswith(source_exts)]
+        # Normalize paths to OS-native separators so they match cmd_files keys
+        # (git ls-tree returns forward slashes, os.path.realpath uses backslashes on Windows)
+        source_files = [os.path.normpath(f) for f in files_to_parse if f.lower().endswith(source_exts)]
         
         def get_realpath(cmd):
             f = cmd.filename
