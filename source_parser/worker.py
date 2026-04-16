@@ -93,11 +93,19 @@ class _ClangWorkerImpl(NodeParserMixin):
         if self.clang_include_path:
             args = args + [f"-I{self.clang_include_path}"]
 
-        tu = self.index.parse(
-            file_path,
-            args=args,
-            options=clang.cindex.TranslationUnit.PARSE_DETAILED_PROCESSING_RECORD
-        )
+        opts = clang.cindex.TranslationUnit.PARSE_DETAILED_PROCESSING_RECORD
+        try:
+            tu = self.index.parse(file_path, args=args, options=opts)
+        except clang.cindex.TranslationUnitLoadError:
+            # Retry with only the flags that are safe and unlikely to cause a null TU.
+            # This recovers from missing PCH files, bad -cc1 remnants, or unknown targets.
+            _SAFE_PREFIXES = ('-std=', '--driver-mode', '-x', '--target=', '-D', '-I', '-isystem', '-iquote')
+            minimal = [a for a in args if any(a.startswith(p) for p in _SAFE_PREFIXES)]
+            logger.warning(
+                "TU parse failed for %s with full args (%d), retrying with minimal args (%d)",
+                file_path, len(args), len(minimal)
+            )
+            tu = self.index.parse(file_path, args=minimal, options=opts)
 
         for inc in tu.get_includes():
             if inc.source and inc.include:
@@ -213,17 +221,79 @@ class _ClangWorkerImpl(NodeParserMixin):
             return "Variable"
         return "Unknown"
 
+    # Detects MSVC-style compile commands when --driver-mode=cl is absent.
+    _MSVC_MARKERS = frozenset({
+        '/EHsc', '/EHa', '/EHs', '/GR', '/GR-', '/W3', '/W4', '/Wall',
+        '/Zi', '/ZI', '/Z7', '/TP', '/TC', '/MD', '/MDd', '/MT', '/MTd',
+    })
+    # Allowlist for cl-driver mode: flags that are kept verbatim.
+    _CL_KEEP_EXACT = frozenset({'--driver-mode=cl', '-Xclang', '-I', '-isystem', '-iquote', '-include'})
+    # Allowlist prefixes for cl-driver mode.
+    _CL_KEEP_PREFIXES = ('/D', '/U', '/I', '/FI', '/imsvc', '/std:', '/TP', '/TC',
+                         '/Zc:', '/permissive', '/volatile:', '/clang:')
+    _GENERIC_KEEP_PREFIXES = ('-D', '-U', '-I', '-isystem', '-iquote', '-include',
+                               '-std=', '-x', '--target=', '-resource-dir=',
+                               '-fms-compatibility-version=', '-fms-extensions',
+                               '-fdeclspec', '-ferror-limit=', '-fdiagnostics-absolute-paths')
+    # Blocklist for non-cl-driver MSVC-style flags that slip through.
+    _CL_EXACT_SKIP = frozenset({'/c', '/nologo', '/showFilenames', '/FC', '/FS', '/MP',
+                                 '/Z7', '/Zo', '/Zi', '/ZI', '/Fd', '/bigobj'})
+    _CL_PREFIX_SKIP = ('/Fo', '/Fd', '/Fa', '/Fi', '/Fm', '/Fp', '/FR', '/Fr',
+                        '/Yl', '/Yu', '/errorReport:', '/sourceDependencies')
+    _CL_WARNING_PREFIXES = ('/W', '/wd', '/we', '/wo', '/w1', '/w2', '/w3', '/w4')
+    _CL_OPT_PREFIXES = ('/O', '/Ob', '/Oi', '/Ot', '/Oy', '/GF', '/Gy', '/Gw', '/GL',
+                        '/GS', '/GR', '/Gd', '/arch:', '/fp:', '/hotpatch',
+                        '/MT', '/MTd', '/MD', '/MDd')
+
     def _sanitize_args(self, args: List[str], file_path: str) -> List[str]:
+        # Detect MSVC-style commands: either already flagged or identified by marker flags.
+        is_cl_driver = '--driver-mode=cl' in args
+        if not is_cl_driver and any(a in self._MSVC_MARKERS for a in args):
+            args = ['--driver-mode=cl'] + list(args)
+            is_cl_driver = True
+
         sanitized, skip_next = [], False
         for a in args:
-            if skip_next: skip_next = False; continue
-            if a == '--': continue
-            if a.startswith(('-W', '-O')): continue
-            if a in {'-c', '-o', '-MMD', '-MF', '-MT', '-MQ', '-fcolor-diagnostics', '-fdiagnostics-color'}:
-                if a in {'-o', '-MF', '-MT', '-MQ'}: skip_next = True
+            if skip_next:
+                sanitized.append(a)   # keep the value of the preceding flag
+                skip_next = False
                 continue
-            if a == file_path or os.path.basename(a) == os.path.basename(file_path): continue
+
+            if a == '--':
+                continue
+            if a == file_path or os.path.basename(a) == os.path.basename(file_path):
+                continue
+
+            if is_cl_driver:
+                # Allowlist: only flags relevant to the AST are kept.
+                if a in self._CL_KEEP_EXACT:
+                    sanitized.append(a)
+                    if a in {'-Xclang', '-I', '-isystem', '-iquote', '-include'}:
+                        skip_next = True
+                    continue
+                if a.startswith(self._CL_KEEP_PREFIXES) or a.startswith(self._GENERIC_KEEP_PREFIXES):
+                    sanitized.append(a)
+                continue
+
+            # GCC/Clang-style: blocklist approach.
+            if a.startswith(('-W', '-O')):
+                continue
+            if a == '-include-pch':
+                skip_next = True   # drop both the flag and its PCH path
+                continue
+            if a in {'-c', '-o', '-MMD', '-MF', '-MT', '-MQ', '-fcolor-diagnostics', '-fdiagnostics-color'}:
+                if a in {'-o', '-MF', '-MT', '-MQ'}:
+                    skip_next = True
+                continue
+            # Drop MSVC-style flags that appear without --driver-mode=cl.
+            if (a in self._CL_EXACT_SKIP
+                    or a.startswith(self._CL_PREFIX_SKIP)
+                    or a.startswith(self._CL_WARNING_PREFIXES)
+                    or a.startswith(self._CL_OPT_PREFIXES)):
+                continue
+
             sanitized.append(a)
+
         return sanitized
 
     def _get_tu_hash(self, args: List[str]) -> str:
